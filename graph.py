@@ -1,5 +1,7 @@
 from typing import TypedDict, Annotated, List, Union
 import operator
+from pathlib import Path
+
 import pandas as pd
 import uuid
 import chromadb
@@ -13,7 +15,7 @@ chromaClient = chromadb.PersistentClient(
     path="./chroma_db",
     settings=Settings(anonymized_telemetry=False)
 )
-sentenceTransformer = embedding_functions.SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
+sentenceTransformer = embedding_functions.SentenceTransformerEmbeddingFunction(model_name="paraphrase-multilingual-MiniLM-L12-v2")
 collection = chromaClient.get_or_create_collection(name="conversationHistory", embedding_function=sentenceTransformer)
 
 class AgentState(TypedDict):
@@ -32,6 +34,8 @@ llm = ChatOpenAI(model="gpt-4o", temperature=0)
 def queryAgent(state: AgentState):
     userInput = state["messages"][-1].content
     filePath = state["dataPath"]
+    fileSuffix = Path(filePath).suffix.lower()
+    isExcel = fileSuffix in [".xlsx", ".xls"]
     feedback = state.get("validationFeedback", "")
     attempt = state.get("queryAttempt", 0)
 
@@ -41,12 +45,21 @@ def queryAgent(state: AgentState):
     taskDescription = "Generate a concise summary of the dataset." if isSummary else userInput
 
     try:
-        dfTemp = pd.read_csv(filePath, nrows=2)
+        if isExcel:
+            dfTemp = pd.read_excel(filePath, nrows=2)
+        else:
+            dfTemp = pd.read_csv(filePath, nrows=2)
         columns = dfTemp.columns.tolist()
         sampleData = dfTemp.to_string()
     except Exception as e:
         return {"extractedData": f"Error reading file: {e}", "queryAttempt": attempt + 1}
     
+    loadInstruction = (
+        f"Load the data using `df = pd.read_excel('{filePath}')`."
+        if isExcel
+        else f"Load the data using `df = pd.read_csv('{filePath}')`."
+    )
+
     systemPrompt = f"""
     You are a Retail Data Analyst. Write Python Pandas code to answer the user's question.
     
@@ -56,7 +69,7 @@ def queryAgent(state: AgentState):
     SAMPLE DATA:{sampleData}
 
     RULES:
-    1. Load the data using `df = pd.read_csv('{filePath}')`.
+    1. {loadInstruction}
     2. Perform the required analysis (filtering, grouping, etc.).
     3. The final answer MUST be stored in a variable named `result`.
     4. Provide only the raw Python code. No markdown formatting or '```python' blocks.
