@@ -13,10 +13,15 @@ from chromadb.config import Settings
 
 chromaClient = chromadb.PersistentClient(
     path="./chroma_db",
-    settings=Settings(anonymized_telemetry=False)
+    settings=Settings(anonymized_telemetry=False),
 )
-sentenceTransformer = embedding_functions.SentenceTransformerEmbeddingFunction(model_name="paraphrase-multilingual-MiniLM-L12-v2")
-collection = chromaClient.get_or_create_collection(name="conversationHistory", embedding_function=sentenceTransformer)
+sentenceTransformer = embedding_functions.SentenceTransformerEmbeddingFunction(
+    model_name="paraphrase-multilingual-MiniLM-L12-v2"
+)
+collection = chromaClient.get_or_create_collection(
+    name="conversationHistory", embedding_function=sentenceTransformer
+)
+
 
 class AgentState(TypedDict):
     messages: Annotated[List[BaseMessage], operator.add]
@@ -27,6 +32,7 @@ class AgentState(TypedDict):
     validationFeedback: str
     threadId: str
     conversationContext: str
+    userId: str
 
 
 llm = ChatOpenAI(model="gpt-4o", temperature=0)
@@ -97,16 +103,23 @@ def queryAgent(state: AgentState):
 def humanizeAgent(state: AgentState):
     rawData = state["extractedData"]
     history = state["messages"]
-    
-    prompt = f"""Convert this raw data into a concise, professional insight: {rawData}.Maintain the context of the conversation: {history}"""    
+
+    prompt = f"""Convert this raw data into a concise, professional insight: {rawData}.Maintain the context of the conversation: {history}"""
     response = llm.invoke(prompt)
 
     collection.add(
         ids=[str(uuid.uuid4())],
-        documents=[f"User: {state['messages'][-1].content} | AI: {response.content}"],
-        metadatas=[{"threadId": state["threadId"]}]
+        documents=[
+            f"User: {state['messages'][-1].content} | AI: {response.content}"
+        ],
+        metadatas=[
+            {
+                "threadId": state["threadId"],
+                "userId": state["userId"],
+            }
+        ],
     )
-    
+
     print("--- Humanize Agent: Insight Generated & Saved ---")
     return {"messages": [AIMessage(content=response.content)]}
 
@@ -130,7 +143,7 @@ def validationAgent(state: AgentState):
 
 def contextAgent(state: AgentState):
     threadId = state["threadId"]
-    lastMessage = state["messages"][-1].content if state["messages"] else ""    
+    lastMessage = state["messages"][-1].content if state["messages"] else ""
     results = collection.query(
         query_texts=[lastMessage],
         where={"threadId": threadId},
